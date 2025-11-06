@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['ALGAE', 'CORAL']
+
+roboflow:
+  workspace: coral-and-algae-detection
+  project: 2025-reefscape-msy88
+  version: 2
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/coral-and-algae-detection/2025-reefscape-msy88/dataset/2
