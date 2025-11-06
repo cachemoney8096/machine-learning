@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['note', 'robot']
+
+roboflow:
+  workspace: michael-jansen
+  project: frc-2024-tlxdn
+  version: 4
+  license: MIT
+  url: https://universe.roboflow.com/michael-jansen/frc-2024-tlxdn/dataset/4
