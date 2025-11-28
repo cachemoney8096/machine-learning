@@ -1,3 +1,5 @@
+#RUN THIS IN COLLAB
+
 from ultralytics import YOLO
 
 # Hardcoded paths - use the .pt file
