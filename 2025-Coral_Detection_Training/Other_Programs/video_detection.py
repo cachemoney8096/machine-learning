@@ -120,7 +120,7 @@ def run_detection_on_video(model_path, video_path, output_path=None, confidence_
 
 if __name__ == "__main__":
     # Example usage
-    model_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/coral-detection-model-v113/weights/best.pt"
+    model_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/coral_detection/coral-detection-model-v113/weights/best.pt"
     video_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/frc_640x640.mp4"
     
     # Run detection with default settings

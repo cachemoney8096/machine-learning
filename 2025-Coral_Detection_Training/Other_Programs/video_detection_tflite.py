@@ -28,6 +28,18 @@ def run_detection_on_video(model_path, video_path, output_path=None, confidence_
         print(f"Input shape: {input_details[0]['shape']}")
         print(f"Input type: {input_details[0]['dtype']}")
         print(f"Number of outputs: {len(output_details)}")
+
+        # === ADDED: PRINT OUTPUT LAYER DETAILS ===
+        print("\n=== OUTPUT LAYERS ===")
+        for i, out in enumerate(output_details):
+            print(f"Output #{i}")
+            print(f"  Name:  {out['name']}")
+            print(f"  Index: {out['index']}")
+            print(f"  Shape: {out['shape']}")
+            print(f"  Dtype: {out['dtype']}")
+            print("----------------------------------")
+        print("==================================\n")
+        # =========================================
         
         # Get input dimensions
         input_shape = input_details[0]['shape']
@@ -321,7 +333,7 @@ def run_detection_on_video(model_path, video_path, output_path=None, confidence_
 
 if __name__ == "__main__":
     # Example usage
-    model_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/coral-detection-model-v113/weights/best_float32.tflite"
+    model_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/coral_detection/tflites/best_algeas.tflite"
     video_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/frc_640x640.mp4"
     
     # Run detection with lowered threshold (your model's max confidence was 0.188)
