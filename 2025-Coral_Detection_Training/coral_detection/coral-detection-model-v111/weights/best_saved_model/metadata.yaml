@@ -1,0 +1,23 @@
+description: Ultralytics best model trained on /home/rhayrapetyan/2025-Coral_Detection_Training/2025
+  REEFSCAPE.v2i.yolov12/data.yaml
+author: Ultralytics
+date: '2026-01-17T17:08:16.345640'
+version: 8.3.248
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 640
+- 640
+names:
+  0: ALGAE
+  1: CORAL
+args:
+  batch: 1
+  fraction: 1.0
+  half: true
+  int8: false
+  nms: false
+channels: 3

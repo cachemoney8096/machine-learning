@@ -3,16 +3,12 @@ import numpy as np
 from pathlib import Path
 import tensorflow as tf
 
-def run_detection_on_video(model_path, video_path, output_path=None, confidence_threshold=0.1, input_size=640):
+
+def run_detection_on_video(model_path, video_path, output_path=None, 
+                          input_size=640, class_names=None, confidence_threshold=0.25):
     """
-    Run object detection on every frame of a video using a .tflite model file.
-    
-    Args:
-        model_path: Path to .tflite model file
-        video_path: Path to input video file
-        output_path: Path for output video (optional)
-        confidence_threshold: Minimum confidence for detections (0-1)
-        input_size: Input size for the model (default: 640)
+    Run object detection on video using TFLite model.
+    Automatically detects output format (YOLO or TFOD style).
     """
     # Load the TFLite model
     print(f"Loading TFLite model from {model_path}...")
@@ -20,41 +16,30 @@ def run_detection_on_video(model_path, video_path, output_path=None, confidence_
         interpreter = tf.lite.Interpreter(model_path=model_path)
         interpreter.allocate_tensors()
         
-        # Get input and output details
         input_details = interpreter.get_input_details()
         output_details = interpreter.get_output_details()
         
-        print("Model loaded successfully!")
+        print("✓ Model loaded successfully!")
         print(f"Input shape: {input_details[0]['shape']}")
-        print(f"Input type: {input_details[0]['dtype']}")
-        print(f"Number of outputs: {len(output_details)}")
-
-        # === ADDED: PRINT OUTPUT LAYER DETAILS ===
-        print("\n=== OUTPUT LAYERS ===")
-        for i, out in enumerate(output_details):
-            print(f"Output #{i}")
-            print(f"  Name:  {out['name']}")
-            print(f"  Index: {out['index']}")
-            print(f"  Shape: {out['shape']}")
-            print(f"  Dtype: {out['dtype']}")
-            print("----------------------------------")
-        print("==================================\n")
-        # =========================================
+        print(f"Input dtype: {input_details[0]['dtype']}")
+        print(f"\nNumber of outputs: {len(output_details)}")
+        print("Output details:")
+        for i, od in enumerate(output_details):
+            print(f"  Output {i}: shape={od['shape']}, dtype={od['dtype']}, name={od.get('name', 'N/A')}")
         
-        # Get input dimensions
         input_shape = input_details[0]['shape']
-        height = input_shape[1]
-        width = input_shape[2]
+        input_height, input_width = input_shape[1], input_shape[2]
         
     except Exception as e:
         print(f"Error loading model: {e}")
+        import traceback
+        traceback.print_exc()
         return
     
-    # Open the video
+    # Open video
     cap = cv2.VideoCapture(video_path)
-    
     if not cap.isOpened():
-        print(f"Error: Could not open video file {video_path}")
+        print(f"Error: Could not open video {video_path}")
         return
     
     # Get video properties
@@ -63,283 +48,334 @@ def run_detection_on_video(model_path, video_path, output_path=None, confidence_
     vid_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    print(f"\nVideo info: {vid_width}x{vid_height} @ {fps}fps, {total_frames} frames")
+    print(f"\nVideo: {vid_width}x{vid_height} @ {fps}fps, {total_frames} frames")
     
-    # Set output path if not provided
+    # Setup output
     if output_path is None:
         input_file = Path(video_path)
         output_path = input_file.parent / f"{input_file.stem}_detected{input_file.suffix}"
     
-    # Create VideoWriter object
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(str(output_path), fourcc, fps, (vid_width, vid_height))
     
     frame_count = 0
     total_detections = 0
+    first_frame_debug = True
     
-    print("\nProcessing video frames...")
+    print(f"\nProcessing video (confidence threshold: {confidence_threshold})")
     print("Press 'q' to quit\n")
     
     try:
         while True:
             ret, frame = cap.read()
-            
             if not ret:
                 break
             
-            # Preprocess frame
-            input_data = cv2.resize(frame, (width, height))
-            input_data = cv2.cvtColor(input_data, cv2.COLOR_BGR2RGB)
-            input_data = np.expand_dims(input_data, axis=0)
+            # Preprocess
+            img_resized = cv2.resize(frame, (input_width, input_height))
+            img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
             
-            # Normalize based on input type
             if input_details[0]['dtype'] == np.float32:
-                input_data = input_data.astype(np.float32) / 255.0
+                img_input = img_rgb.astype(np.float32) / 255.0
             else:
-                input_data = input_data.astype(np.uint8)
+                img_input = img_rgb.astype(np.uint8)
+            
+            img_input = np.expand_dims(img_input, axis=0)
             
             # Run inference
-            interpreter.set_tensor(input_details[0]['index'], input_data)
+            interpreter.set_tensor(input_details[0]['index'], img_input)
             interpreter.invoke()
             
-            # Get detection results
-            # Different TFLite models have different output formats
-            # Common formats: [boxes, classes, scores, num_detections] or [output_0]
+            # Get all outputs
+            outputs = [interpreter.get_tensor(output_details[i]['index']) for i in range(len(output_details))]
             
-            if len(output_details) == 4:
-                # Format: boxes, classes, scores, num_detections
-                boxes = interpreter.get_tensor(output_details[0]['index'])[0]  # Bounding box coordinates
-                classes = interpreter.get_tensor(output_details[1]['index'])[0]  # Class index
-                scores = interpreter.get_tensor(output_details[2]['index'])[0]  # Confidence scores
-                num_detections = int(interpreter.get_tensor(output_details[3]['index'])[0])
-            elif len(output_details) == 1:
-                # YOLO format: single output
-                output = interpreter.get_tensor(output_details[0]['index'])
+            # Debug first frame
+            if first_frame_debug:
+                print("\n=== FIRST FRAME DEBUG ===")
+                for i, output in enumerate(outputs):
+                    print(f"Output {i} shape: {output.shape}")
+                    print(f"Output {i} dtype: {output.dtype}")
+                    print(f"Output {i} min/max: {output.min():.4f} / {output.max():.4f}")
+                    if len(output.shape) <= 3:
+                        print(f"Output {i} sample values: {output.flatten()[:10]}")
+                    print()
+                first_frame_debug = False
+                print("======================\n")
+            
+            # Debug detections per class
+            detections_by_class = {}
+            
+            # Parse outputs based on structure
+            final_boxes = []
+            final_scores = []
+            final_class_ids = []
+            
+            # Detect output format
+            if len(outputs) == 1:
+                # YOLO-style: single output
+                output = outputs[0]
                 
-                # Debug: print shape on first frame
-                if frame_count == 0:
-                    print(f"\nDEBUG - Raw output shape: {output.shape}")
-                
-                # Remove batch dimension if present
+                # Remove batch dimension
                 if len(output.shape) == 3:
                     output = output[0]
-                    if frame_count == 0:
-                        print(f"DEBUG - After removing batch: {output.shape}")
                 
-                # Check if output needs to be transposed
-                # YOLO output can be (num_values, num_boxes) or (num_boxes, num_values)
-                # We need (num_boxes, num_values) where num_values is typically 5-6
-                if output.shape[0] < output.shape[1]:
-                    output = output.T  # Transpose to (num_boxes, num_values)
-                    if frame_count == 0:
-                        print(f"DEBUG - After transpose: {output.shape}")
+                print(f"Single output shape after squeeze: {output.shape}")
                 
-                # Parse YOLO output
-                boxes = []
-                classes = []
-                scores = []
+                # Common YOLO formats:
+                # (8400, 6) or (N, 6) = [x, y, w, h, conf, class]
+                # (8400, 85) or (N, 85) = [x, y, w, h, conf, 80 classes]
+                # (6, 8400) or (85, 8400) = transposed version
                 
-                detection_count = 0
-                for detection in output:
-                    # Debug: print first detection fully on first frame
-                    if frame_count == 0 and detection_count == 0:
-                        print(f"DEBUG - Full first detection: {detection}")
-                        print(f"DEBUG - Detection length: {len(detection)}")
+                # Check if transposed
+                if output.shape[0] < output.shape[1] and output.shape[0] <= 85:
+                    output = output.T
+                    print(f"Transposed to: {output.shape}")
+                
+                num_predictions = output.shape[0]
+                num_values = output.shape[1]
+                
+                print(f"Processing {num_predictions} predictions with {num_values} values each")
+                
+                # Parse based on number of values
+                if num_values == 4:
+                    # Just boxes [x, y, w, h] - no confidence
+                    boxes_xywh = output
+                    confidences = np.ones(num_predictions)
+                    class_ids = np.zeros(num_predictions, dtype=int)
+                elif num_values == 5:
+                    # [x, y, w, h, class_id]
+                    boxes_xywh = output[:, :4]
+                    confidences = np.ones(num_predictions)
+                    class_ids = output[:, 4].astype(int)
+                elif num_values == 6:
+                    # [x, y, w, h, conf, class_id]
+                    boxes_xywh = output[:, :4]
+                    confidences = output[:, 4]
+                    class_ids = output[:, 5].astype(int)
+                elif num_values >= 85:
+                    # [x, y, w, h, obj_conf, class1, class2, ...]
+                    boxes_xywh = output[:, :4]
+                    obj_conf = output[:, 4]
+                    class_scores = output[:, 5:]
+                    class_ids = np.argmax(class_scores, axis=1)
+                    class_confidences = np.max(class_scores, axis=1)
+                    confidences = obj_conf * class_confidences
+                else:
+                    # Assume [x, y, w, h, class_scores...]
+                    boxes_xywh = output[:, :4]
+                    class_scores = output[:, 4:]
+                    class_ids = np.argmax(class_scores, axis=1)
+                    confidences = np.max(class_scores, axis=1)
+                
+                # Filter by confidence and process boxes
+                for i in range(num_predictions):
+                    conf = float(confidences[i])
+                    class_id = int(class_ids[i])
                     
-                    if len(detection) >= 5:
-                        # Try to find where confidence actually is
-                        # Standard YOLO: [x, y, w, h, confidence, class_scores...]
-                        # But some models use: [x, y, w, h, class_scores...] with no separate confidence
-                        
-                        x_center, y_center, w, h = detection[0:4]
-                        
-                        if len(detection) == 5:
-                            # Single class: [x, y, w, h, confidence]
-                            confidence = detection[4]
-                            class_id = 0
-                            class_conf = 1.0
-                        elif len(detection) == 6:
-                            # Could be [x, y, w, h, conf, class] OR [x, y, w, h, class1, class2]
-                            # Check if index 4 looks like confidence (0-1) or class score
-                            confidence = detection[4]
-                            class_scores = detection[5:]
-                            class_id = np.argmax(class_scores)
-                            class_conf = class_scores[class_id]
-                        else:
-                            # Multi-class without separate confidence: [x, y, w, h, class_scores...]
-                            # The confidence IS the max class score
-                            class_scores = detection[4:]
-                            class_id = np.argmax(class_scores)
-                            confidence = class_scores[class_id]
-                            class_conf = 1.0
-                        
-                        # Debug: print top confidences on first frame
-                        if frame_count == 0 and detection_count < 5:
-                            print(f"DEBUG - Detection {detection_count}: conf={confidence:.4f}, box=({x_center:.1f}, {y_center:.1f}, {w:.1f}, {h:.1f})")
-                            if len(detection) > 5:
-                                print(f"  Class scores: {detection[4:].tolist()}")
-                            detection_count += 1
-                        
-                        if confidence >= confidence_threshold:
-                            
-                            # YOLO outputs coordinates relative to input size
-                            # Convert to normalized [0-1] coordinates
-                            x1 = (x_center - w/2) / width
-                            y1 = (y_center - h/2) / height
-                            x2 = (x_center + w/2) / width
-                            y2 = (y_center + h/2) / height
-                            
-                            # Clamp to valid range
-                            x1, y1 = max(0, x1), max(0, y1)
-                            x2, y2 = min(1, x2), min(1, y2)
-                            
-                            boxes.append([x1, y1, x2, y2])
-                            classes.append(class_id)
-                            scores.append(float(confidence))
-                
-                if frame_count == 0:
-                    print(f"DEBUG - Found {len(boxes)} detections above threshold {confidence_threshold}")
-                
-                # Apply NMS to remove duplicate detections
-                if len(boxes) > 0:
-                    boxes_array = np.array(boxes)
-                    scores_array = np.array(scores)
+                    # Debug: count all detections before filtering
+                    if class_id not in detections_by_class:
+                        detections_by_class[class_id] = {'total': 0, 'filtered': 0}
+                    detections_by_class[class_id]['total'] += 1
                     
-                    # Convert to format needed for NMS: [x, y, w, h]
-                    boxes_xywh = []
-                    for box in boxes_array:
-                        x1, y1, x2, y2 = box
-                        x = x1 * vid_width
-                        y = y1 * vid_height
-                        w = (x2 - x1) * vid_width
-                        h = (y2 - y1) * vid_height
-                        boxes_xywh.append([x, y, w, h])
+                    if conf < confidence_threshold:
+                        continue
                     
-                    # Apply NMS
-                    indices = cv2.dnn.NMSBoxes(boxes_xywh, scores_array.tolist(), confidence_threshold, 0.45)
+                    detections_by_class[class_id]['filtered'] += 1
                     
-                    if len(indices) > 0:
-                        indices = indices.flatten()
-                        boxes = [boxes[i] for i in indices]
-                        classes = [classes[i] for i in indices]
-                        scores = [scores[i] for i in indices]
+                    # Get box coordinates
+                    x_center, y_center, w, h = boxes_xywh[i]
                     
-                    if frame_count == 0:
-                        print(f"DEBUG - After NMS: {len(boxes)} detections")
-                
-                boxes = np.array(boxes) if len(boxes) > 0 else np.array([])
-                classes = np.array(classes) if len(classes) > 0 else np.array([])
-                scores = np.array(scores) if len(scores) > 0 else np.array([])
-                num_detections = len(boxes)
-            else:
-                print(f"Warning: Unexpected output format with {len(output_details)} outputs")
-                boxes = np.array([])
-                classes = np.array([])
-                scores = np.array([])
-                num_detections = 0
-            
-            # Draw detections on frame
-            annotated_frame = frame.copy()
-            detections_in_frame = 0
-            
-            for i in range(num_detections):
-                if scores[i] >= confidence_threshold:
-                    # Convert normalized coordinates to pixel coordinates
-                    if len(output_details) == 4:
-                        # Standard format: [ymin, xmin, ymax, xmax]
-                        ymin, xmin, ymax, xmax = boxes[i]
-                        left = int(xmin * vid_width)
-                        top = int(ymin * vid_height)
-                        right = int(xmax * vid_width)
-                        bottom = int(ymax * vid_height)
+                    # Check if coordinates are normalized (0-1) or pixel values
+                    if x_center <= 1.0 and y_center <= 1.0 and w <= 1.0 and h <= 1.0:
+                        # Normalized coordinates
+                        x1 = (x_center - w/2) * vid_width
+                        y1 = (y_center - h/2) * vid_height
+                        x2 = (x_center + w/2) * vid_width
+                        y2 = (y_center + h/2) * vid_height
                     else:
-                        # YOLO format: [x1, y1, x2, y2]
-                        x1, y1, x2, y2 = boxes[i]
-                        left = int(x1 * vid_width)
-                        top = int(y1 * vid_height)
-                        right = int(x2 * vid_width)
-                        bottom = int(y2 * vid_height)
+                        # Pixel coordinates relative to input size
+                        scale_x = vid_width / input_width
+                        scale_y = vid_height / input_height
+                        x1 = (x_center - w/2) * scale_x
+                        y1 = (y_center - h/2) * scale_y
+                        x2 = (x_center + w/2) * scale_x
+                        y2 = (y_center + h/2) * scale_y
                     
-                    # Debug: print box coordinates on first frame
-                    if frame_count == 0:
-                        print(f"DEBUG - Drawing box {i}: ({left}, {top}) to ({right}, {bottom}), conf={scores[i]:.2f}")
+                    x1 = int(max(0, min(x1, vid_width - 1)))
+                    y1 = int(max(0, min(y1, vid_height - 1)))
+                    x2 = int(max(0, min(x2, vid_width - 1)))
+                    y2 = int(max(0, min(y2, vid_height - 1)))
                     
-                    # Draw bounding box with thicker line and different color for visibility
-                    cv2.rectangle(annotated_frame, (left, top), (right, bottom), (0, 255, 0), 3)
+                    if x2 <= x1 or y2 <= y1:
+                        continue
                     
-                    # Draw label
-                    label = f"Class {int(classes[i])}: {scores[i]:.2f}"
-                    label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
-                    
-                    # Background for text
-                    cv2.rectangle(annotated_frame, 
-                                (left, top - label_size[1] - 10),
-                                (left + label_size[0], top),
-                                (0, 255, 0), -1)
-                    
-                    # Text
-                    cv2.putText(annotated_frame, label, (left, top - 5),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
-                    
-                    detections_in_frame += 1
+                    final_boxes.append([x1, y1, x2, y2])
+                    final_scores.append(conf)
+                    final_class_ids.append(int(class_ids[i]))
+                
+                # Print class distribution every 30 frames
+                if frame_count % 30 == 0 and detections_by_class:
+                    print(f"\n--- Frame {frame_count} Class Distribution ---")
+                    for cls_id, counts in sorted(detections_by_class.items()):
+                        cls_name = class_names[cls_id] if class_names and cls_id < len(class_names) else f"Class {cls_id}"
+                        print(f"{cls_name}: {counts['filtered']}/{counts['total']} passed threshold (conf > {confidence_threshold})")
+                    print()
             
-            if frame_count == 0:
-                print(f"DEBUG - Drew {detections_in_frame} boxes on frame")
-                print(f"DEBUG - Frame shape: {annotated_frame.shape}, Video size: {vid_width}x{vid_height}")
+            elif len(outputs) == 4:
+                # TFOD-style: [num_detections, boxes, scores, classes]
+                num_det_tensor = outputs[0]
+                boxes = outputs[1]
+                scores = outputs[2]
+                classes = outputs[3]
+                
+                # Handle num_detections
+                if num_det_tensor.size == 1:
+                    num_detections = int(num_det_tensor)
+                else:
+                    num_detections = boxes.shape[1] if len(boxes.shape) > 1 else 10
+                
+                # Remove batch dimension
+                if len(boxes.shape) == 3:
+                    boxes = boxes[0]
+                if len(scores.shape) == 2:
+                    scores = scores[0]
+                if len(classes.shape) == 2:
+                    classes = classes[0]
+                
+                for i in range(min(num_detections, len(scores))):
+                    score = float(scores[i])
+                    class_id = int(classes[i])
+                    
+                    # Debug: count all detections before filtering
+                    if class_id not in detections_by_class:
+                        detections_by_class[class_id] = {'total': 0, 'filtered': 0}
+                    detections_by_class[class_id]['total'] += 1
+                    
+                    if score < confidence_threshold:
+                        continue
+                    
+                    detections_by_class[class_id]['filtered'] += 1
+                    
+                    # TFOD format: [ymin, xmin, ymax, xmax] normalized
+                    ymin, xmin, ymax, xmax = boxes[i]
+                    
+                    x1 = int(xmin * vid_width)
+                    y1 = int(ymin * vid_height)
+                    x2 = int(xmax * vid_width)
+                    y2 = int(ymax * vid_height)
+                    
+                    x1 = max(0, min(x1, vid_width - 1))
+                    y1 = max(0, min(y1, vid_height - 1))
+                    x2 = max(0, min(x2, vid_width - 1))
+                    y2 = max(0, min(y2, vid_height - 1))
+                    
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    
+                    final_boxes.append([x1, y1, x2, y2])
+                    final_scores.append(score)
+                    final_class_ids.append(int(classes[i]))
+                
+                # Print class distribution every 30 frames
+                if frame_count % 30 == 0 and detections_by_class:
+                    print(f"\n--- Frame {frame_count} Class Distribution ---")
+                    for cls_id, counts in sorted(detections_by_class.items()):
+                        cls_name = class_names[cls_id] if class_names and cls_id < len(class_names) else f"Class {cls_id}"
+                        print(f"{cls_name}: {counts['filtered']}/{counts['total']} passed threshold (conf > {confidence_threshold})")
+                    print()
             
-            total_detections += detections_in_frame
+            total_detections += len(final_boxes)
             
-            # Write frame to output video
+            # Draw detections
+            annotated_frame = frame.copy()
+            
+            for box, score, class_id in zip(final_boxes, final_scores, final_class_ids):
+                x1, y1, x2, y2 = map(int, box)
+                
+                if class_id == 0:
+                    color = (0, 255, 0)
+                    class_name = class_names[0] if class_names else "Class 0"
+                else:
+                    color = (255, 0, 0)
+                    class_name = class_names[class_id] if class_names and class_id < len(class_names) else f"Class {class_id}"
+                
+                thickness = 2
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), color, thickness)
+                
+                label = f"{class_name} {score:.2f}"
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.6
+                font_thickness = 2
+                
+                (text_w, text_h), baseline = cv2.getTextSize(label, font, font_scale, font_thickness)
+                
+                cv2.rectangle(
+                    annotated_frame,
+                    (x1, y1 - text_h - 10),
+                    (x1 + text_w + 5, y1),
+                    color,
+                    -1
+                )
+                
+                cv2.putText(
+                    annotated_frame,
+                    label,
+                    (x1 + 2, y1 - 5),
+                    font,
+                    font_scale,
+                    (0, 0, 0),
+                    font_thickness
+                )
+            
             out.write(annotated_frame)
+            cv2.imshow('Detection - Press Q to quit', annotated_frame)
             
-            # Display the frame
-            cv2.imshow('Object Detection - Press Q to quit', annotated_frame)
-            
-            # Print progress
-            if frame_count % 30 == 0 or detections_in_frame > 0:
-                progress = (frame_count / total_frames) * 100
-                print(f"Frame {frame_count}/{total_frames} ({progress:.1f}%) - Detections: {detections_in_frame}", end='\r')
+            if frame_count % 30 == 0 or len(final_boxes) > 0:
+                progress = (frame_count + 1) / total_frames * 100
+                avg_det = total_detections / (frame_count + 1)
+                print(
+                    f"Frame {frame_count + 1}/{total_frames} ({progress:.1f}%) | "
+                    f"Detections: {len(final_boxes)} | Avg: {avg_det:.2f}",
+                    end='\r'
+                )
             
             frame_count += 1
             
-            # Press 'q' to quit early
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 print("\n\nStopped by user")
                 break
     
     except KeyboardInterrupt:
         print("\n\nInterrupted by user")
-    
     except Exception as e:
-        print(f"\n\nError during processing: {e}")
+        print(f"\n\nError: {e}")
         import traceback
         traceback.print_exc()
-    
     finally:
-        # Release everything
         cap.release()
         out.release()
         cv2.destroyAllWindows()
         
-        print(f"\n{'='*60}")
-        print(f"Processing complete!")
-        print(f"{'='*60}")
+        print(f"\n{'='*70}")
+        print(f"PROCESSING COMPLETE")
+        print(f"{'='*70}")
         print(f"Frames processed: {frame_count}/{total_frames}")
         print(f"Total detections: {total_detections}")
-        print(f"Average detections per frame: {total_detections/max(frame_count, 1):.2f}")
-        print(f"Output saved to: {output_path}")
-        print(f"{'='*60}")
+        print(f"Average per frame: {total_detections/max(frame_count, 1):.2f}")
+        print(f"Output saved: {output_path}")
+        print(f"{'='*70}")
 
 
 if __name__ == "__main__":
-    # Example usage
-    model_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/coral_detection/tflites/best_algeas.tflite"
+    model_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/coral_detection/coral-detection-model-v112/weights/best_saved_model/best_float32.tflite"
     video_path = "/Users/rubenhayrapetyan/Downloads/Code/FRC/machine-learning/2025-Coral_Detection_Training/frc_640x640.mp4"
     
-    # Run detection with lowered threshold (your model's max confidence was 0.188)
+    class_names = ["Algae", "Coral"]
+    
     run_detection_on_video(
         model_path=model_path,
         video_path=video_path,
-        confidence_threshold=0.1,  # Lowered from 0.25 to catch detections
-        input_size=640
+        input_size=640,
+        class_names=class_names,
+        confidence_threshold=0.1
     )

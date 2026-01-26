@@ -1,0 +1,10 @@
+item {
+    name: "ALGAE",
+    id: 1,
+    display_name: "ALGAE"
+}
+item {
+    name: "CORAL",
+    id: 2,
+    display_name: "CORAL"
+}
